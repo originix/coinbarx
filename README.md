@@ -23,33 +23,39 @@ change. No Dock icon, no window clutter — it just lives in your menu bar.
 # Open in Xcode and press ⌘R
 open coinbarx.xcodeproj
 
-# …or build & launch from the command line
+# …or from the command line (Debug)
 xcodebuild -project coinbarx.xcodeproj -scheme coinbarx -configuration Debug build
 open ~/Library/Developer/Xcode/DerivedData/coinbarx-*/Build/Products/Debug/coinbarx.app
 ```
 
+For a standalone app you can keep or install, do a Release build into a local folder:
+
+```bash
+xcodebuild -project coinbarx.xcodeproj -scheme coinbarx -configuration Release \
+  -derivedDataPath build build
+cp -R build/Build/Products/Release/coinbarx.app /Applications/
+```
+
 The app appears in the menu bar (no Dock icon — it's a `LSUIElement` agent). Prices
 refresh every 10 seconds; use the dropdown's **Refresh** button to update on demand and
-**Quit** (or ⌘Q) to exit.
+**Quit** (or ⌘Q) to exit. To start it at login, add it under
+**System Settings → General → Login Items**.
 
 ## Adding a new token
 
 Edit the `Asset.tracked` array in [`coinbarx/Models/Asset.swift`](coinbarx/Models/Asset.swift)
-and append one line. `mint` is the SPL mint address; `label` is the display name; `glyph`
-is an optional short symbol used in the menu bar:
+and append one line. `mint` is the SPL mint address; `label` is the display name:
 
 ```swift
 static let tracked: [Asset] = [
-    Asset(mint: "So11111111111111111111111111111111111111112", label: "SOL", glyph: "◎"),
-    Asset(mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", label: "JUP"),
-    Asset(mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", label: "BONK"),
-    Asset(mint: "<mint>", label: "WIF"),   // ← add a token like this
+    Asset(mint: "So11111111111111111111111111111111111111112", label: "SOL"),
+    Asset(mint: "<mint>", label: "JUP"),   // ← add a token like this
 ]
 ```
 
-The first entry is the **primary** token whose price shows in the menu bar (its `glyph`
-is used there when set). The UI and polling pick up the rest automatically. Find mints on
-Solscan / Jupiter and verify with `https://lite-api.jup.ag/price/v3?ids=<mint>`.
+The first entry is the **primary** token whose price shows in the menu bar. The UI and
+polling pick up the rest automatically. Find mints on Solscan / Jupiter and verify with
+`https://lite-api.jup.ag/price/v3?ids=<mint>`.
 
 ## Data source
 
