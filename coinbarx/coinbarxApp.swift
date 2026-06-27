@@ -10,8 +10,7 @@ struct coinbarxApp: App {
         MenuBarExtra {
             DropdownView(viewModel: viewModel)
         } label: {
-            Image(nsImage: SolanaIcon.menuBar)
-            Text(viewModel.menuBarPrice)
+            Text("◎ \(viewModel.menuBarPrice)")
         }
         .menuBarExtraStyle(.window)
     }
