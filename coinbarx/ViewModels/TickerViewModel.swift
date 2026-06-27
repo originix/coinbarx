@@ -8,13 +8,23 @@ final class TickerViewModel: ObservableObject {
     @Published private(set) var quotes: [String: Quote] = [:]
     @Published private(set) var lastUpdated: Date?
 
+    /// True when the most recent fetch failed (prices shown are stale, not blank).
+    @Published private(set) var isOffline = false
+
+    /// User-entered buy positions (against the primary asset). Persisted to UserDefaults.
+    @Published var positions: [Position] = [] {
+        didSet { savePositions() }
+    }
+
     let assets: [Asset]
 
     private var timer: Timer?
     private let pollInterval: TimeInterval = 10
+    private let positionsKey = "positions"
 
     init(assets: [Asset] = Asset.tracked) {
         self.assets = assets
+        loadPositions()
         start()
     }
 
@@ -24,10 +34,43 @@ final class TickerViewModel: ObservableObject {
 
     var primary: Asset? { assets.first }
 
+    /// Current price of the primary asset, if loaded — used for P&L.
+    var primaryPrice: Double? {
+        guard let primary else { return nil }
+        return quotes[primary.mint]?.lastPrice
+    }
+
     /// Compact primary price for the menu bar ("…" before the first load).
     var menuBarPrice: String {
-        guard let primary, let quote = quotes[primary.mint] else { return "…" }
-        return PriceFormat.string(quote.lastPrice, grouping: false)
+        guard let price = primaryPrice else { return "…" }
+        return PriceFormat.string(price, grouping: false)
+    }
+
+    // MARK: - Positions
+
+    func addPosition(costUSDC: Double, quantity: Double) {
+        guard costUSDC > 0, quantity > 0 else { return }
+        positions.append(Position(costUSDC: costUSDC, quantity: quantity))
+    }
+
+    func removePosition(_ position: Position) {
+        positions.removeAll { $0.id == position.id }
+    }
+
+    func totalCost() -> Double { positions.reduce(0) { $0 + $1.costUSDC } }
+    func totalPnL(at price: Double) -> Double {
+        positions.reduce(0) { $0 + $1.pnl(at: price) }
+    }
+
+    private func loadPositions() {
+        guard let data = UserDefaults.standard.data(forKey: positionsKey),
+              let decoded = try? JSONDecoder().decode([Position].self, from: data) else { return }
+        positions = decoded
+    }
+
+    private func savePositions() {
+        guard let data = try? JSONEncoder().encode(positions) else { return }
+        UserDefaults.standard.set(data, forKey: positionsKey)
     }
 
     private func start() {
@@ -42,9 +85,13 @@ final class TickerViewModel: ObservableObject {
     }
 
     private func refreshAll() async {
-        guard let fetched = await Self.fetch(assets), !fetched.isEmpty else { return }
+        guard let fetched = await Self.fetch(assets), !fetched.isEmpty else {
+            isOffline = true        // keep last good prices, just flag the failure
+            return
+        }
         for (mint, quote) in fetched { quotes[mint] = quote }
         lastUpdated = Date()
+        isOffline = false
     }
 
     /// Jupiter Price V3 — free, no API key, Solana on-chain pricing. One request returns
