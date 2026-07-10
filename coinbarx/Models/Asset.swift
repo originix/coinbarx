@@ -1,7 +1,6 @@
 import Foundation
 
-/// A tracked token, identified by its Solana SPL mint address (Jupiter's price id).
-struct Asset: Identifiable, Hashable {
+struct Asset: Identifiable, Hashable, Codable {
     let mint: String
     let label: String
 
@@ -9,7 +8,6 @@ struct Asset: Identifiable, Hashable {
 }
 
 extension Asset {
-    /// Tracked tokens. Append one line to add a token; the first is the menu bar's primary.
     static let tracked: [Asset] = [
         Asset(mint: "So11111111111111111111111111111111111111112", label: "SOL"),
     ]
@@ -21,10 +19,9 @@ struct Quote {
     let priceChangePercent: Double
 }
 
-/// A buy position: `costUSDC` paid to receive `quantity` of the primary asset (SOL).
-/// P&L is computed live against the current price.
 struct Position: Identifiable, Codable, Hashable {
     var id = UUID()
+    var mint: String
     var costUSDC: Double
     var quantity: Double
 
@@ -32,4 +29,14 @@ struct Position: Identifiable, Codable, Hashable {
     func value(at price: Double) -> Double { quantity * price }
     func pnl(at price: Double) -> Double { value(at: price) - costUSDC }
     func pnlPercent(at price: Double) -> Double { costUSDC > 0 ? pnl(at: price) / costUSDC * 100 : 0 }
+}
+
+extension Position {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
+        mint = (try? c.decode(String.self, forKey: .mint)) ?? "So11111111111111111111111111111111111111112"
+        costUSDC = try c.decode(Double.self, forKey: .costUSDC)
+        quantity = try c.decode(Double.self, forKey: .quantity)
+    }
 }

@@ -63,6 +63,7 @@ extension Color {
 /// The window shown when the menu bar item is clicked.
 struct DropdownView: View {
     @ObservedObject var viewModel: TickerViewModel
+    @State private var showSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -73,6 +74,11 @@ struct DropdownView: View {
 
             Divider().padding(.vertical, 8)
             PositionsView(viewModel: viewModel)
+
+            if showSettings {
+                Divider().padding(.vertical, 8)
+                TokensView(viewModel: viewModel)
+            }
 
             Divider().padding(.vertical, 8)
             footer
@@ -93,6 +99,12 @@ struct DropdownView: View {
             }
             .font(.caption)
             Spacer()
+            Button { withAnimation(.easeInOut(duration: 0.15)) { showSettings.toggle() } } label: {
+                Image(systemName: showSettings ? "gearshape.fill" : "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .help("Manage tokens")
+
             Button(action: viewModel.refresh) {
                 Image(systemName: "arrow.clockwise")
             }
@@ -162,11 +174,22 @@ private struct AssetRow: View {
 /// summary, and a sticky add form. Deleting asks for confirmation.
 private struct PositionsView: View {
     @ObservedObject var viewModel: TickerViewModel
+    @State private var selectedMint = ""
     @State private var costText = ""
     @State private var qtyText = ""
 
     private var isValid: Bool {
-        (Double(costText) ?? 0) > 0 && (Double(qtyText) ?? 0) > 0
+        !effectiveMint.isEmpty && (Double(costText) ?? 0) > 0 && (Double(qtyText) ?? 0) > 0
+    }
+
+    /// The picked token, or the first token if nothing valid is selected yet.
+    private var effectiveMint: String {
+        if viewModel.assets.contains(where: { $0.mint == selectedMint }) { return selectedMint }
+        return viewModel.primary?.mint ?? ""
+    }
+
+    private func label(for mint: String) -> String {
+        viewModel.assets.first { $0.mint == mint }?.label ?? "?"
     }
 
     var body: some View {
@@ -185,13 +208,14 @@ private struct PositionsView: View {
             } else {
                 VStack(spacing: 8) {
                     ForEach(viewModel.positions) { position in
-                        PositionRow(position: position, price: viewModel.primaryPrice) {
+                        PositionRow(position: position,
+                                    label: label(for: position.mint),
+                                    price: viewModel.price(for: position.mint)) {
                             viewModel.removePosition(position)
                         }
                     }
                 }
-
-                if let price = viewModel.primaryPrice { totalRow(price: price) }
+                totalRow
             }
 
             Divider().padding(.top, 2)
@@ -199,9 +223,10 @@ private struct PositionsView: View {
         }
     }
 
-    private func totalRow(price: Double) -> some View {
+    private var totalRow: some View {
         let cost = viewModel.totalCost()
-        let pnl = viewModel.totalPnL(at: price)
+        let value = viewModel.totalValue()
+        let pnl = value - cost
         let percent = cost > 0 ? pnl / cost * 100 : 0
         let up = pnl >= 0
         return VStack(spacing: 2) {
@@ -214,7 +239,7 @@ private struct PositionsView: View {
                     .foregroundStyle(up ? Color.gain : Color.loss)
             }
             HStack {
-                Text("Value $\(PriceFormat.string(cost + pnl))")
+                Text("Value $\(PriceFormat.string(value))")
                     .font(.caption2)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -230,32 +255,37 @@ private struct PositionsView: View {
 
     private var addForm: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Add a buy — USDC paid → SOL received")
+            Text("Add a buy — token, USDC paid, amount received")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
+                Picker("", selection: $selectedMint) {
+                    ForEach(viewModel.assets) { asset in
+                        Text(asset.label).tag(asset.mint)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 68)
                 TextField("USDC", text: $costText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 78)
+                    .frame(minWidth: 40)
                     .onSubmit(add)
-                Image(systemName: "arrow.right")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                TextField("SOL", text: $qtyText)
+                TextField(label(for: effectiveMint), text: $qtyText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 78)
+                    .frame(minWidth: 40)
                     .onSubmit(add)
-                Spacer()
                 Button("Add", action: add)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!isValid)
+                    .fixedSize()
             }
         }
+        .onAppear { if selectedMint.isEmpty { selectedMint = viewModel.primary?.mint ?? "" } }
     }
 
     private func add() {
         guard let cost = Double(costText), let qty = Double(qtyText) else { return }
-        viewModel.addPosition(costUSDC: cost, quantity: qty)
+        viewModel.addPosition(mint: effectiveMint, costUSDC: cost, quantity: qty)
         costText = ""
         qtyText = ""
     }
@@ -264,6 +294,7 @@ private struct PositionsView: View {
 /// One position: cost → quantity and entry price on the left, live P&L on the right.
 private struct PositionRow: View {
     let position: Position
+    let label: String
     let price: Double?
     let onDelete: () -> Void
 
@@ -272,7 +303,7 @@ private struct PositionRow: View {
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("$\(PriceFormat.string(position.costUSDC)) → \(PriceFormat.string(position.quantity)) SOL")
+                Text("$\(PriceFormat.string(position.costUSDC)) → \(PriceFormat.string(position.quantity)) \(label)")
                     .font(.caption)
                     .monospacedDigit()
                 Text("entry $\(PriceFormat.string(position.entryPrice))")
@@ -324,5 +355,82 @@ private struct PositionRow: View {
         } else {
             Text("—").foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Settings: manage tracked tokens — list with remove, plus a label + mint add form.
+private struct TokensView: View {
+    @ObservedObject var viewModel: TickerViewModel
+    @State private var labelText = ""
+    @State private var mintText = ""
+
+    private var isValid: Bool {
+        !labelText.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !mintText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("TOKENS")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, -2)
+
+            Toggle("Auto-rotate menu bar", isOn: $viewModel.rotates)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .font(.caption)
+
+            VStack(spacing: 8) {
+                ForEach(viewModel.assets) { asset in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(asset.label)
+                                .font(.caption.weight(.medium))
+                            Text(asset.mint)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Button { viewModel.removeAsset(asset) } label: {
+                            Image(systemName: "minus.circle.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.tertiary)
+                        .help("Remove \(asset.label)")
+                    }
+                }
+            }
+
+            Divider().padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Add token — label + SPL mint address")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    TextField("SOL", text: $labelText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 52)
+                        .onSubmit(add)
+                    TextField("mint address", text: $mintText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 40)
+                        .onSubmit(add)
+                    Button("Add", action: add)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!isValid)
+                        .fixedSize()
+                }
+            }
+        }
+    }
+
+    private func add() {
+        viewModel.addAsset(mint: mintText, label: labelText)
+        labelText = ""
+        mintText = ""
     }
 }

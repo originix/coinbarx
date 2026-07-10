@@ -16,20 +16,35 @@ final class TickerViewModel: ObservableObject {
         didSet { savePositions() }
     }
 
-    let assets: [Asset]
+    @Published private(set) var assets: [Asset] = []
+
+    @Published private(set) var displayIndex = 0
+
+    @Published var rotates = false {
+        didSet {
+            UserDefaults.standard.set(rotates, forKey: rotatesKey)
+            if !rotates { displayIndex = 0 }
+        }
+    }
 
     private var timer: Timer?
+    private var rotateTimer: Timer?
     private let pollInterval: TimeInterval = 10
+    private let rotateInterval: TimeInterval = 6
     private let positionsKey = "positions"
+    private let assetsKey = "assets"
+    private let rotatesKey = "rotates"
 
-    init(assets: [Asset] = Asset.tracked) {
-        self.assets = assets
+    init() {
+        rotates = UserDefaults.standard.bool(forKey: rotatesKey)
+        loadAssets()
         loadPositions()
         start()
     }
 
     deinit {
         timer?.invalidate()
+        rotateTimer?.invalidate()
     }
 
     var primary: Asset? { assets.first }
@@ -40,26 +55,47 @@ final class TickerViewModel: ObservableObject {
         return quotes[primary.mint]?.lastPrice
     }
 
-    /// Compact primary price for the menu bar ("…" before the first load).
-    var menuBarPrice: String {
-        guard let price = primaryPrice else { return "…" }
-        return PriceFormat.string(price, grouping: false)
+    /// The token currently shown in the menu bar. Rotates through `assets` over time.
+    var displayAsset: Asset? {
+        guard !assets.isEmpty else { return nil }
+        return assets[min(displayIndex, assets.count - 1)]
+    }
+
+    /// Menu bar text for the current token, e.g. "SOL 152.34" ("…" before first load).
+    var menuBarTitle: String {
+        guard let asset = displayAsset else { return "coinbarx" }
+        guard let quote = quotes[asset.mint] else { return "\(asset.label) …" }
+        return "\(asset.label) \(PriceFormat.string(quote.lastPrice, grouping: false))"
+    }
+
+    /// Advance to the next token (called by the rotate timer).
+    func advanceDisplay() {
+        guard rotates, assets.count > 1 else { displayIndex = 0; return }
+        displayIndex = (displayIndex + 1) % assets.count
     }
 
     // MARK: - Positions
 
-    func addPosition(costUSDC: Double, quantity: Double) {
-        guard costUSDC > 0, quantity > 0 else { return }
-        positions.append(Position(costUSDC: costUSDC, quantity: quantity))
+    func addPosition(mint: String, costUSDC: Double, quantity: Double) {
+        guard !mint.isEmpty, costUSDC > 0, quantity > 0 else { return }
+        positions.append(Position(mint: mint, costUSDC: costUSDC, quantity: quantity))
     }
 
     func removePosition(_ position: Position) {
         positions.removeAll { $0.id == position.id }
     }
 
+    /// Current price for a token, if loaded.
+    func price(for mint: String) -> Double? { quotes[mint]?.lastPrice }
+
     func totalCost() -> Double { positions.reduce(0) { $0 + $1.costUSDC } }
-    func totalPnL(at price: Double) -> Double {
-        positions.reduce(0) { $0 + $1.pnl(at: price) }
+
+    /// Portfolio value now: each position at its token's price (falls back to cost if
+    /// that token has no price yet, so a missing quote doesn't distort the total).
+    func totalValue() -> Double {
+        positions.reduce(0) { sum, p in
+            sum + (price(for: p.mint).map { p.value(at: $0) } ?? p.costUSDC)
+        }
     }
 
     private func loadPositions() {
@@ -73,10 +109,46 @@ final class TickerViewModel: ObservableObject {
         UserDefaults.standard.set(data, forKey: positionsKey)
     }
 
+    // MARK: - Tokens
+
+    /// Add a token. Ignores blanks and duplicate mints; refreshes so its price loads.
+    func addAsset(mint: String, label: String) {
+        let mint = mint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !mint.isEmpty, !label.isEmpty,
+              !assets.contains(where: { $0.mint == mint }) else { return }
+        assets.append(Asset(mint: mint, label: label))
+        saveAssets()
+        refresh()
+    }
+
+    func removeAsset(_ asset: Asset) {
+        assets.removeAll { $0.mint == asset.mint }
+        quotes[asset.mint] = nil
+        saveAssets()
+    }
+
+    private func loadAssets() {
+        if let data = UserDefaults.standard.data(forKey: assetsKey),
+           let decoded = try? JSONDecoder().decode([Asset].self, from: data), !decoded.isEmpty {
+            assets = decoded
+        } else {
+            assets = Asset.tracked
+        }
+    }
+
+    private func saveAssets() {
+        guard let data = try? JSONEncoder().encode(assets) else { return }
+        UserDefaults.standard.set(data, forKey: assetsKey)
+    }
+
     private func start() {
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
+        }
+        rotateTimer = Timer.scheduledTimer(withTimeInterval: rotateInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.advanceDisplay() }
         }
     }
 
